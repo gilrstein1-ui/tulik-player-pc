@@ -70,5 +70,7 @@ instead), and the PWA "install" button (this *is* the native app).
 ## Build
 Cloud-built by [`.github/workflows/build-native.yml`](../.github/workflows/build-native.yml)
 on `windows-latest` (the Pi has no Rust toolchain). One `.exe` per user uploaded
-as an artifact, then hosted on each user's hub as `/hub/MediaSagePlayer-Native.exe`.
+as an artifact, then hosted on each user's hub as `/hub/TulikPlayerNative.exe`.
 To rebuild: edit under `native/` → push → `gh run watch <id>` → `gh run download`.
+Per-user endpoint/auth comes from the `BUILD_CONFIG` / `PW_*` repo secrets (this
+repo is public; nothing identifying is in source — see the repo README).

@@ -1,6 +1,6 @@
 # Native player (TulikPlayerNative.exe) → web parity plan
 
-> **STATUS 2026-06-13 (build 27+): DONE through Round 5.** Rounds 1–3 (feedback
+> **STATUS 2026-06-13 (build 31, repo now PUBLIC): DONE through Round 5.** Rounds 1–3 (feedback
 > tags/notices, presence/devices/hand-off, puppy + send-link) shipped earlier.
 > **Round 4** repainted the whole app to the web's gold-on-near-black look + DM Sans
 > (fixes "looks like old MediaSage") and added feedback **screenshots** (capture +
@@ -10,6 +10,8 @@
 > media keys/SMTC (E1), gapless splice (D3), stall buffer (D4), annotator/voice note
 > (A4/A5), coach-mark ring (C7), WebSocket hand-off (B4). C3 (track-number hover-play)
 > declined — native rows already play on click. See FEATURES.md for the live matrix.
+> Repo went public 2026-06-13; per-user endpoints/creds now live only in the
+> `BUILD_CONFIG`/`PW_*` secrets (nothing identifying in source or history).
 
 _Authored 2026-06-13. Baseline: native **build 22** (2026-06-11). Source of truth:
 `mediasage-gil/frontend/player.html` + `backend/player_ext.py`._

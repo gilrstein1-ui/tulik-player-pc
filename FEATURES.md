@@ -16,7 +16,7 @@ canonical feature set; everything else is measured against it.
 **Legend:** ✅ done · ⚠️ partial · ❌ missing · 🌐 inherited via webview · — N/A
 · ❓ verify in web
 
-_Last updated: 2026-06-13 (overnight feedback round — see "Web feedback round 2026-06-13" below; **the visualizer is REMOVED everywhere** by owner request, replaced on Gil's PC app only by the dancing puppy)._
+_Last updated: 2026-06-13 — native **build 31** (Rounds 1–5 done: theme repaint + DM Sans, feedback screenshots, idle panel); **repo is now PUBLIC**, endpoints/creds only in `BUILD_CONFIG`/`PW_*` secrets. **Visualizer REMOVED everywhere** by owner request, replaced on Gil's PC app only by the dancing puppy._
 
 ## Native parity Round 4 — 2026-06-13 (build 27) — "stop looking like old MediaSage" + screenshots
 The two PC-app feedback items Gil flagged as still "planned":
