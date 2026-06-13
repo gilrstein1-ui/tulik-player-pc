@@ -1,0 +1,9 @@
+node_modules/
+package-lock.json
+src-tauri/target/
+src-tauri/gen/
+src-tauri/icons/
+src-tauri/capabilities/remote-window.json
+dist/
+.DS_Store
+Thumbs.db

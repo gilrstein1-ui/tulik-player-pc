@@ -1,0 +1,80 @@
+name: build-native-windows
+
+# Fully native (no-webview) player — separate binary from the Tauri app, built
+# from native/. One .exe per user, each baking that user's PUBLIC endpoint +
+# basic-auth creds (reuses the same PW_* secrets as the Tauri workflow).
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'native/**'
+      - '.github/workflows/build-native.yml'
+      - 'app-icon.png'
+      - 'brandmark.png'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [ gil, ohad, rambo, noodles, canoli ]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve build config for ${{ matrix.variant }}
+        shell: bash
+        # NOTHING identifying lives in this (public) repo. Per-user endpoint, auth
+        # username + label come from the BUILD_CONFIG secret (one
+        # "variant|base_url|authuser|label" line per user); the password from PW_*.
+        # All derived values are masked so they never appear in the public logs.
+        env:
+          BUILD_CONFIG: ${{ secrets.BUILD_CONFIG }}
+          PW_gil: ${{ secrets.PW_GIL }}
+          PW_ohad: ${{ secrets.PW_OHAD }}
+          PW_rambo: ${{ secrets.PW_RAMBO }}
+          PW_noodles: ${{ secrets.PW_NOODLES }}
+          PW_canoli: ${{ secrets.PW_CANOLI }}
+        run: |
+          LINE=$(printf '%s\n' "$BUILD_CONFIG" | grep "^${{ matrix.variant }}|" || true)
+          if [ -z "$LINE" ]; then echo "no BUILD_CONFIG line for ${{ matrix.variant }}"; exit 1; fi
+          IFS='|' read -r _v URL AU LB <<< "$LINE"
+          # share list = "Label=base" for every configured user (for the native send-to-a-friend menu)
+          SHARE=$(printf '%s\n' "$BUILD_CONFIG" | awk -F'|' 'NF>=4 && $1!=""{printf "%s%s=%s",sep,$4,$2; sep=","}')
+          PWVAR="PW_${{ matrix.variant }}"; PW="${!PWVAR}"
+          for v in "$PW" "$URL" "$AU" "$SHARE"; do [ -n "$v" ] && echo "::add-mask::$v"; done
+          {
+            echo "TULIK_BASE_URL=$URL"
+            echo "TULIK_AUTH_USER=$AU"
+            echo "TULIK_AUTH_PW=$PW"
+            echo "TULIK_USER_LABEL=$LB"
+            echo "TULIK_SHARE_HOSTS=$SHARE"
+            echo "TULIK_BUILD=${{ github.run_number }}"
+          } >> "$GITHUB_ENV"
+          echo "resolved ${{ matrix.variant }} (build ${{ github.run_number }})"
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          key: native-${{ matrix.variant }}
+
+      - name: Build native player (${{ matrix.variant }})
+        shell: bash
+        # TULIK_* come from the resolve step ($GITHUB_ENV) and are baked via option_env!.
+        run: |
+          cargo build --release --manifest-path native/Cargo.toml
+          mkdir -p dist
+          cp native/target/release/TulikPlayer.exe \
+             "dist/TulikPlayer-${{ matrix.variant }}.exe"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-player-${{ matrix.variant }}
+          path: dist/TulikPlayer-${{ matrix.variant }}.exe
+          if-no-files-found: error

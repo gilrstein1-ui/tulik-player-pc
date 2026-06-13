@@ -1,0 +1,25 @@
+[package]
+name = "tulik-player"
+version = "1.0.3"
+description = "tulik player"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2" }
+
+[dependencies]
+tauri = { version = "2" }
+tauri-plugin-global-shortcut = "2"
+
+# Windows-only: feed the baked basic-auth credentials to WebView2 so the public
+# (password-protected) player opens with no sign-in prompt.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
+windows = { version = "0.61", features = ["Win32_Foundation"] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

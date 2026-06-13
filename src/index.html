@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>tulik player</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0e0e10; color: #e8e8ea;
+    font: 15px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif; }
+  .wrap { height: 100%; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 18px; text-align: center; padding: 24px; }
+  img.logo { width: 84px; height: 84px; border-radius: 18px; }
+  .spin { width: 26px; height: 26px; border: 3px solid #2a2a2e; border-top-color: #8b8bff;
+    border-radius: 50%; animation: s 0.9s linear infinite; }
+  @keyframes s { to { transform: rotate(360deg); } }
+  .muted { color: #9a9aa2; font-size: 13px; max-width: 30ch; }
+  .err { color: #ff8b8b; }
+  button { background: #1c1c20; color: #e8e8ea; border: 1px solid #34343a;
+    border-radius: 10px; padding: 9px 16px; font-size: 14px; cursor: pointer; }
+  button:hover { background: #26262c; }
+  input { background: #141418; color: #e8e8ea; border: 1px solid #34343a;
+    border-radius: 10px; padding: 9px 12px; font-size: 14px; width: 240px; text-align: center; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <img class="logo" src="player-icon-512.png" alt="" onerror="this.style.display='none'" />
+    <div id="spinner" class="spin"></div>
+    <div id="status" class="muted">Connecting to tulik&hellip;</div>
+
+    <div id="failbox" class="hidden">
+      <div class="muted err" style="margin-bottom:14px">
+        Couldn't reach your Pi.<br />Make sure it's on, and (if you're away from home)
+        that Tailscale is running on this PC.
+      </div>
+      <div class="row" style="justify-content:center; margin-bottom:10px">
+        <button onclick="connect()">Try again</button>
+      </div>
+      <div class="row" style="justify-content:center">
+        <input id="manual" placeholder="or type an address" />
+        <button onclick="manualGo()">Go</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // Server addresses are NOT stored in this repo. In the packaged app they are
+  // provided by the native layer (injected privately at build time). This list
+  // is only a browser-dev fallback and is intentionally empty in source.
+  const CANDIDATES = [];
+  const PATH = "/player";
+  const PER_TRY_MS = 2500;
+
+  const statusEl = () => document.getElementById("status");
+  const spinEl   = () => document.getElementById("spinner");
+  const failEl   = () => document.getElementById("failbox");
+
+  // Reachability probe. The probe is cross-origin to this shell, so we use
+  // mode:"no-cors" — we only need to know the request RESOLVED (server is up),
+  // not read the body. A timeout/network error => unreachable.
+  function reachable(base) {
+    return new Promise((resolve) => {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => { ctrl.abort(); resolve(false); }, PER_TRY_MS);
+      fetch(base + PATH, { mode: "no-cors", cache: "no-store", signal: ctrl.signal })
+        .then(() => { clearTimeout(t); resolve(true); })
+        .catch(() => { clearTimeout(t); resolve(false); });
+    });
+  }
+
+  async function connect() {
+    failEl().classList.add("hidden");
+    spinEl().classList.remove("hidden");
+    statusEl().textContent = "Connecting to tulik…";
+
+    // Inside the packaged app, the native (Rust) layer probes the Pi over the
+    // network — reliable, and free of the browser's http/secure-context rules.
+    const tauri = window.__TAURI__;
+    if (tauri && tauri.core && typeof tauri.core.invoke === "function") {
+      try {
+        const target = await tauri.core.invoke("find_pi"); // e.g. "http://…:5766/player" or null
+        if (target) { window.location.href = target; return; }
+      } catch (e) { /* fall through to failure UI */ }
+      spinEl().classList.add("hidden");
+      statusEl().textContent = "";
+      failEl().classList.remove("hidden");
+      return;
+    }
+
+    // Fallback path when opened in a plain browser (dev/testing): probe from JS.
+    let saved = null;
+    try { saved = localStorage.getItem("tulik.player.base"); } catch (e) {}
+    const list = saved ? [saved, ...CANDIDATES.filter(c => c !== saved)] : CANDIDATES;
+    for (const base of list) {
+      if (await reachable(base)) {
+        try { localStorage.setItem("tulik.player.base", base); } catch (e) {}
+        window.location.href = base + PATH;
+        return;
+      }
+    }
+    spinEl().classList.add("hidden");
+    statusEl().textContent = "";
+    failEl().classList.remove("hidden");
+  }
+
+  function manualGo() {
+    let v = (document.getElementById("manual").value || "").trim();
+    if (!v) return;
+    if (!/^https?:\/\//i.test(v)) v = "http://" + v;
+    v = v.replace(/\/+$/, "");
+    if (!/:\d+$/.test(v) && !/\/player$/i.test(v)) v += ":5766";
+    try { localStorage.setItem("tulik.player.base", v.replace(/\/player$/i, "")); } catch (e) {}
+    window.location.href = /\/player$/i.test(v) ? v : v + PATH;
+  }
+
+  connect();
+</script>
+</body>
+</html>

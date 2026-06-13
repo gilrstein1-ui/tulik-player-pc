@@ -1,0 +1,99 @@
+name: build-windows
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'native/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # One installer per person, from the same codebase. Each opens that user's
+        # PUBLIC web address (works anywhere, no Tailscale) and has its own id/name.
+        variant: [ gil, ohad, rambo, noodles, canoli ]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve build config for ${{ matrix.variant }}
+        shell: bash
+        # NOTHING identifying lives in this (public) repo. Per-user endpoint + auth
+        # username come from the BUILD_CONFIG secret (one
+        # "variant|base_url|authuser|label" line per user); the password from PW_*.
+        # Derived values are masked so they never appear in the public logs.
+        env:
+          BUILD_CONFIG: ${{ secrets.BUILD_CONFIG }}
+          PW_gil: ${{ secrets.PW_GIL }}
+          PW_ohad: ${{ secrets.PW_OHAD }}
+          PW_rambo: ${{ secrets.PW_RAMBO }}
+          PW_noodles: ${{ secrets.PW_NOODLES }}
+          PW_canoli: ${{ secrets.PW_CANOLI }}
+        run: |
+          LINE=$(printf '%s\n' "$BUILD_CONFIG" | grep "^${{ matrix.variant }}|" || true)
+          if [ -z "$LINE" ]; then echo "no BUILD_CONFIG line for ${{ matrix.variant }}"; exit 1; fi
+          IFS='|' read -r _v EPS AU LB <<< "$LINE"
+          PWVAR="PW_${{ matrix.variant }}"; PW="${!PWVAR}"
+          for v in "$PW" "$EPS" "$AU"; do [ -n "$v" ] && echo "::add-mask::$v"; done
+          {
+            echo "EPS=$EPS"
+            echo "TULIK_PI_ENDPOINTS=$EPS"
+            echo "TULIK_AUTH_USER=$AU"
+            echo "TULIK_AUTH_PW=$PW"
+          } >> "$GITHUB_ENV"
+          echo "resolved ${{ matrix.variant }}"
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.variant }}
+
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install JS deps
+        run: npm install
+
+      - name: Generate app icons from source image
+        run: npx tauri icon app-icon.png
+
+      - name: Generate remote window-control capability
+        shell: bash
+        run: |
+          node -e "const eps=(process.env.EPS||'').split(',').map(s=>s.trim()).filter(Boolean); const cap={identifier:'remote-window',description:'window controls/resize from the player pages',windows:['main'],remote:{urls:eps},permissions:['core:window:allow-set-decorations','core:window:allow-minimize','core:window:allow-toggle-maximize','core:window:allow-close','core:window:allow-start-dragging','core:window:allow-start-resize-dragging','core:window:allow-is-maximized']}; require('fs').writeFileSync('src-tauri/capabilities/remote-window.json', JSON.stringify(cap,null,2)); console.log('remote urls:', eps.length);"
+
+      - name: Cache Tauri bundler tools (NSIS, etc.)
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/tauri
+          key: tauri-bundler-tools-nsis-3.11
+
+      - name: Build Windows installer (${{ matrix.variant }})
+        shell: bash
+        # TULIK_PI_ENDPOINTS comes from the "Resolve public endpoint" step ($GITHUB_ENV).
+        # Addresses are the user's PUBLIC DuckDNS URL (already public) — fine in the clear.
+        run: |
+          for attempt in 1 2 3 4; do
+            echo "::group::tauri build attempt $attempt"
+            npx tauri build --config src-tauri/overrides/${{ matrix.variant }}.json && { echo "::endgroup::"; exit 0; }
+            echo "::endgroup::"
+            echo "attempt $attempt failed (likely transient download); retrying in 20s..."
+            sleep 20
+          done
+          echo "all attempts failed"; exit 1
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tulik-player-${{ matrix.variant }}
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
