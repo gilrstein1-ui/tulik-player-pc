@@ -1411,20 +1411,25 @@ impl App {
             .frame(egui::Frame::none().fill(BG).inner_margin(egui::Margin::symmetric(16.0, 8.0)))
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
-                    // brand: "tulik" 🐶(real dog mark) "player" — matches the web header
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 3.0;
-                        ui.label(RichText::new("tulik").size(22.0).strong().color(TEXT));
-                        if let Some(logo) = &self.logo {
-                            ui.add(
-                                egui::Image::new(egui::load::SizedTexture::from_handle(logo))
-                                    .max_height(40.0)
-                                    .max_width(48.0),
-                            );
-                        } else {
-                            ui.label(RichText::new("🐶").size(22.0));
-                        }
-                        ui.label(RichText::new("player").size(22.0).color(ACCENT).strong());
+                    // brand: small cursive "(native)" stacked over "tulik" 🐶(real dog mark)
+                    // "player" — so you can tell at a glance this is the fully-native build
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.label(RichText::new("(native)").size(11.0).italics().color(ACCENT));
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 3.0;
+                            ui.label(RichText::new("tulik").size(22.0).strong().color(TEXT));
+                            if let Some(logo) = &self.logo {
+                                ui.add(
+                                    egui::Image::new(egui::load::SizedTexture::from_handle(logo))
+                                        .max_height(34.0)
+                                        .max_width(42.0),
+                                );
+                            } else {
+                                ui.label(RichText::new("🐶").size(22.0));
+                            }
+                            ui.label(RichText::new("player").size(22.0).color(ACCENT).strong());
+                        });
                     });
                     ui.add_space(18.0);
                     pill_tab(ui, &mut self.tab, Tab::Player, "Player");
