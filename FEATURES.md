@@ -83,6 +83,14 @@ menu per-item + the manager + offline-mode filtering).
 | Coach-mark content rewrite: "How it flows" intro bubble + only non-obvious marks | ✅ | ❌ | 🌐 | 🌐 |
 | Music Files "Back to the player" closes the ⊞ overlay (postMessage) — fixes the second-frozen-player / "UI stuck" bug; toolmenu.js bumped all 8 copies | ✅ | — | 🌐 | 🌐 |
 
+## Tap-along beat game — 2026-06-14 (Gil ONLY)
+First **native** parity item ported back from web. The webview forms (Tauri/Android) inherit the
+live page; native re-implements it in egui. Beat data via `/api/player/beatmap/{rk}` (librosa beat-map;
+endpoint exists on Gil's instance only, so it's naturally gil-gated). Folded into the puppy `V` overlay.
+| Feature | Web | Native | Tauri | Android |
+|---|---|---|---|---|
+| 🥁 Tap-along beat game: scores taps vs the real beat-map (±window, double-time midpoint accepted), seconds-on-beat streak, miss → red flash + reset, session best, beat-pulse ring; pad-click or **Space**, `←`/Esc back to the puppy | ✅ | ✅ | 🌐 | 🌐 |
+
 ## Web feedback round 2 — 2026-06-13 ~04:00 (GA all 5)
 | Feature | Web | Native | Tauri | Android |
 |---|---|---|---|---|

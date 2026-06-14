@@ -13,7 +13,7 @@ use std::thread;
 use eframe::egui;
 use egui::{Color32, RichText};
 
-use api::{Album, ApiClient, Artist, Decade, Device, Genre, HandoffJob, Lyrics, Notice, NowOnPlex, PlGroup, Player, QgEvent, Stats, Track};
+use api::{Album, ApiClient, Artist, Beatmap, Decade, Device, Genre, HandoffJob, Lyrics, Notice, NowOnPlex, PlGroup, Player, QgEvent, Stats, Track};
 use audio::Cmd;
 
 // --- palette (matches the web "tulik player" CSS :root exactly) ---
@@ -197,6 +197,8 @@ enum DataMsg {
     Handoff(HandoffJob),
     RemoteCmd(String),
     WebDevices(Vec<Device>),
+    /// (rating_key, beat-map) for the tap game — empty beat-map ⇒ analysis failed
+    Beatmap(String, Beatmap),
     Toast(String),
     Error(String),
     Noop,
@@ -302,6 +304,25 @@ struct App {
     is_gil: bool,
     /// friendly user label, used as the "from" in share links
     user_label: String,
+    // --- tap-along beat game (Gil only; folded into the dancing-puppy overlay) ---
+    /// the real beat-map (librosa beats) for the track it was loaded for
+    bm_rk: String,
+    bm_bpm: f32,
+    bm_beats: Vec<f32>,
+    /// 0 idle · 1 loading · 2 ready · 3 failed (no beat data for this track)
+    bm_state: u8,
+    /// false = just watch the puppy · true = play the beat game in the overlay
+    tg_game: bool,
+    /// playback time the current on-beat streak began (secs); <0 = no streak
+    tg_streak_start: f32,
+    /// playback time of the last good (on-beat) tap; <0 = none
+    tg_last_good: f32,
+    /// best streak this session (secs)
+    tg_best: f32,
+    /// remaining seconds of the green/red tap-feedback flash
+    tg_flash_good: f32,
+    tg_flash_bad: f32,
+    tg_status: String,
 }
 
 impl App {
@@ -492,6 +513,17 @@ impl App {
             web_devices: Vec::new(),
             is_gil,
             user_label,
+            bm_rk: String::new(),
+            bm_bpm: 0.0,
+            bm_beats: Vec::new(),
+            bm_state: 0,
+            tg_game: false,
+            tg_streak_start: -1.0,
+            tg_last_good: -1.0,
+            tg_best: 0.0,
+            tg_flash_good: 0.0,
+            tg_flash_bad: 0.0,
+            tg_status: String::new(),
         }
     }
 
@@ -742,6 +774,22 @@ impl App {
         self.np_lyrics = None;
         self.np_lyric_idx = -1;
 
+        // tap-game beat-map (Gil only): fire-and-forget; never blocks now-playing.
+        // The endpoint only exists on Gil's instance, so this is naturally gil-gated.
+        if self.is_gil {
+            self.bm_rk = rk.clone();
+            self.bm_bpm = 0.0;
+            self.bm_beats.clear();
+            self.bm_state = 1;
+            self.tg_streak_start = -1.0; // new track drops any live streak (best is kept)
+            self.tg_last_good = -1.0;
+            let rkb = rk.clone();
+            self.fetch(move |a| match a.beatmap(&rkb) {
+                Ok(b) => DataMsg::Beatmap(rkb.clone(), b),
+                Err(_) => DataMsg::Beatmap(rkb.clone(), Beatmap::default()),
+            });
+        }
+
         let rk2 = rk.clone();
         self.fetch(move |a| match a.track_meta(&rk2) {
             Ok(m) => DataMsg::Meta(rk2.clone(), m.format_badge.unwrap_or_default(), m.rating.unwrap_or(0.0)),
@@ -793,6 +841,17 @@ impl App {
                         self.radio_on = true; // seeded radio keeps extending too
                         self.tab = Tab::Player;
                         self.toast = format!("☄ Radio: {n} similar tracks");
+                    }
+                }
+                DataMsg::Beatmap(rk, b) => {
+                    if rk == self.bm_rk {
+                        if b.bpm > 0.0 || !b.beats.is_empty() {
+                            self.bm_bpm = b.bpm;
+                            self.bm_beats = b.beats;
+                            self.bm_state = 2;
+                        } else {
+                            self.bm_state = 3;
+                        }
                     }
                 }
                 DataMsg::Meta(rk, badge, rating) => {
@@ -1192,7 +1251,11 @@ impl eframe::App for App {
 
         // keyboard shortcuts (mirrors the web player)
         let esc = ctx.input(|i| i.key_pressed(egui::Key::Escape));
-        if esc {
+        if esc && self.show_full_viz && self.tg_game {
+            // in the beat game: Esc steps back to the puppy, doesn't close the overlay
+            self.tg_game = false;
+            self.tg_end_streak();
+        } else if esc {
             self.show_help = false;
             self.show_fb = false;
             self.show_eq = false;
@@ -1200,6 +1263,7 @@ impl eframe::App for App {
             self.show_full_viz = false;
             self.show_links = false;
             self.cast_confirm = None;
+            self.tg_game = false;
         }
         if !ctx.wants_keyboard_input() {
             let (space, k_next, k_prev, k_fwd, k_back, k_mute, k_viz) = ctx.input(|i| {
@@ -1215,7 +1279,9 @@ impl eframe::App for App {
                 )
             });
             if space {
-                if self.follow_on {
+                if self.show_full_viz && self.tg_game && self.is_gil {
+                    self.tg_tap(snap); // Space is a beat tap while the game is open
+                } else if self.follow_on {
                     self.follow_control(if self.follow_playing { "pause" } else { "play" });
                 } else {
                     self.play(Cmd::Toggle);
@@ -1251,6 +1317,10 @@ impl eframe::App for App {
             }
             if k_viz && self.is_gil {
                 self.show_full_viz = !self.show_full_viz;
+                if !self.show_full_viz {
+                    self.tg_game = false;
+                    self.tg_end_streak();
+                }
             }
         }
 
@@ -2808,6 +2878,126 @@ impl App {
         (s / self.viz_bars.len() as f32 * 1.4).clamp(0.0, 1.0)
     }
 
+    // ==================== tap-along beat game (Gil only) ====================
+    // Scores taps against the REAL librosa beat-map so it stays in phase even when
+    // a track's tempo drifts. Same rules as the web player: ±window around the
+    // nearest beat (double-time midpoint accepted), seconds-on-beat streak, a miss
+    // flashes red and resets to 0, the session best is kept.
+
+    /// The two real beats surrounding playback time `tau` (secs). Past the analyzed
+    /// window it extrapolates from the measured BPM. None ⇒ no beat data yet.
+    fn tg_surround(&self, tau: f32) -> Option<(f32, f32)> {
+        let b = &self.bm_beats;
+        if b.len() > 1 && tau >= b[0] && tau <= b[b.len() - 1] {
+            let (mut lo, mut hi) = (0usize, b.len() - 1);
+            while lo < hi - 1 {
+                let m = (lo + hi) / 2;
+                if b[m] <= tau { lo = m; } else { hi = m; }
+            }
+            return Some((b[lo], b[lo + 1]));
+        }
+        if self.bm_bpm <= 0.0 {
+            return None;
+        }
+        let per = 60.0 / self.bm_bpm;
+        let anchor = if b.is_empty() { 0.0 } else if tau < b[0] { b[0] } else { b[b.len() - 1] };
+        let k = ((tau - anchor) / per).floor();
+        Some((anchor + k * per, anchor + (k + 1.0) * per))
+    }
+
+    /// (distance to nearest beat-or-midpoint, accept window) for a tap at `tau`.
+    fn tg_grid(&self, tau: f32) -> Option<(f32, f32)> {
+        let (a, b) = self.tg_surround(tau)?;
+        let spacing = (b - a) / 2.0;
+        let cands = [a, b, (a + b) / 2.0];
+        let best = cands.iter().map(|c| (tau - c).abs()).fold(9.0f32, f32::min);
+        Some((best, (spacing * 0.33).min(0.11)))
+    }
+
+    /// Fractional position between the two surrounding beats (0 = on a beat). Drives
+    /// the pulse ring. None ⇒ fall back to a free clock.
+    fn tg_phase(&self, tau: f32) -> Option<f32> {
+        let b = &self.bm_beats;
+        if b.len() > 1 {
+            if tau >= b[0] && tau <= b[b.len() - 1] {
+                let (mut lo, mut hi) = (0usize, b.len() - 1);
+                while lo < hi - 1 {
+                    let m = (lo + hi) / 2;
+                    if b[m] <= tau { lo = m; } else { hi = m; }
+                }
+                let (a, bb) = (b[lo], b[lo + 1]);
+                return Some(if bb > a { (tau - a) / (bb - a) } else { 0.0 });
+            }
+            if self.bm_bpm > 0.0 {
+                let per = 60.0 / self.bm_bpm;
+                let mut f = ((tau - b[b.len() - 1]) % per) / per;
+                if f < 0.0 { f += 1.0; }
+                return Some(f);
+            }
+        }
+        if self.bm_bpm > 0.0 {
+            let per = 60.0 / self.bm_bpm;
+            return Some((tau % per) / per);
+        }
+        None
+    }
+
+    fn tg_end_streak(&mut self) {
+        if self.tg_streak_start >= 0.0 && self.tg_last_good >= 0.0 {
+            let dur = (self.tg_last_good - self.tg_streak_start).max(0.0);
+            if dur > self.tg_best { self.tg_best = dur; }
+        }
+        self.tg_streak_start = -1.0;
+        self.tg_last_good = -1.0;
+    }
+
+    fn tg_miss(&mut self, why: &str) {
+        self.tg_flash_bad = 0.2;
+        self.tg_end_streak();
+        self.tg_status = format!("✗ {why} — streak reset");
+    }
+
+    /// A beat tap (pad click or Space while the game is open).
+    fn tg_tap(&mut self, snap: &audio::Shared) {
+        if !snap.playing {
+            self.tg_status = "Press play ▶ then tap".into();
+            return;
+        }
+        let tau = snap.position;
+        match self.tg_grid(tau) {
+            None => {
+                self.tg_status = if self.bm_state == 1 {
+                    "Finding the beat… one sec".into()
+                } else {
+                    "No beat data for this track".into()
+                };
+            }
+            Some((best, win)) => {
+                if best <= win {
+                    self.tg_flash_good = 0.2;
+                    if self.tg_streak_start < 0.0 {
+                        self.tg_streak_start = tau;
+                    }
+                    self.tg_last_good = tau;
+                    self.tg_status.clear();
+                } else {
+                    self.tg_miss("off the beat");
+                }
+            }
+        }
+    }
+
+    /// Per-frame streak upkeep: a dropped beat (no on-time tap for ~1.6 beats)
+    /// breaks the streak even without a wrong tap.
+    fn tg_tick(&mut self, snap: &audio::Shared) {
+        if self.tg_streak_start >= 0.0 && self.tg_last_good >= 0.0 {
+            let per = 60.0 / if self.bm_bpm > 0.0 { self.bm_bpm } else { 110.0 };
+            if snap.position - self.tg_last_good > per * 1.6 {
+                self.tg_miss("missed a beat");
+            }
+        }
+    }
+
     /// The dancing puppy (Gil's build only — it replaced the removed visualizer):
     /// the real dog brandmark bobs + scales to the music. Mini version, drawn in
     /// the playbar strip where the spectrum used to be.
@@ -2834,7 +3024,24 @@ impl App {
         }
         self.update_viz_levels(28);
         let e = self.viz_energy();
+        // decay the tap-feedback flashes
+        let dt = ctx.input(|i| i.stable_dt).min(0.1);
+        if self.tg_flash_good > 0.0 { self.tg_flash_good = (self.tg_flash_good - dt).max(0.0); }
+        if self.tg_flash_bad > 0.0 { self.tg_flash_bad = (self.tg_flash_bad - dt).max(0.0); }
+        // per-frame streak upkeep + live best while the game is up
+        if self.tg_game && snap.playing {
+            self.tg_tick(snap);
+            if self.tg_streak_start >= 0.0 {
+                let live = (snap.position - self.tg_streak_start).max(0.0);
+                if live > self.tg_best { self.tg_best = live; }
+            }
+        }
         let screen = ctx.screen_rect();
+        // deferred actions (set inside the Area closure, applied after it)
+        let mut do_tap = false;
+        let mut want_game = false;
+        let mut want_dog = false;
+        let mut want_close = false;
         egui::Area::new(egui::Id::new("fullviz"))
             .fixed_pos(egui::Pos2::ZERO)
             .order(egui::Order::Foreground)
@@ -2842,52 +3049,111 @@ impl App {
                 // eat clicks so the UI underneath can't be hit through the overlay
                 let _bg = ui.interact(screen, egui::Id::new("fullviz-bg"), egui::Sense::click());
                 ui.painter().rect_filled(screen, 0.0, Color32::BLACK);
-                // the dancing puppy — big, bobbing + scaling to the beat
                 let cx = screen.center().x;
                 let cy = screen.center().y;
-                let sz = screen.height() * (0.34 + 0.13 * e);
-                let bob = e * screen.height() * 0.06;
-                if let Some(logo) = &self.logo {
-                    // soft glow disc behind the dog, pulsing with the music
-                    ui.painter().circle_filled(egui::pos2(cx, cy - bob), sz * 0.62, ACCENT.gamma_multiply(0.10 + 0.18 * e));
-                    let r = egui::Rect::from_center_size(egui::pos2(cx, cy - bob), egui::vec2(sz, sz));
-                    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-                    ui.painter().image(logo.id(), r, uv, Color32::WHITE);
-                } else {
-                    ui.painter().text(egui::pos2(cx, cy - bob), egui::Align2::CENTER_CENTER, "🐶", egui::FontId::proportional(sz), Color32::WHITE);
-                }
-                // now-playing text, bottom-center (matches the web overlay)
                 let cur = if self.follow_on { self.follow_track.clone() } else { snap.current.clone() };
-                if let Some(t) = &cur {
-                    ui.painter().text(
-                        egui::pos2(screen.center().x, screen.bottom() - 66.0),
-                        egui::Align2::CENTER_CENTER,
-                        &t.title,
-                        egui::FontId::proportional(26.0),
-                        Color32::WHITE,
-                    );
-                    ui.painter().text(
-                        egui::pos2(screen.center().x, screen.bottom() - 38.0),
-                        egui::Align2::CENTER_CENTER,
-                        &t.artist,
-                        egui::FontId::proportional(16.0),
-                        Color32::from_rgba_unmultiplied(255, 255, 255, 200),
-                    );
+
+                if !self.tg_game {
+                    // ---------- watch the dancing puppy ----------
+                    let sz = screen.height() * (0.34 + 0.13 * e);
+                    let bob = e * screen.height() * 0.06;
+                    if let Some(logo) = &self.logo {
+                        ui.painter().circle_filled(egui::pos2(cx, cy - bob), sz * 0.62, ACCENT.gamma_multiply(0.10 + 0.18 * e));
+                        let r = egui::Rect::from_center_size(egui::pos2(cx, cy - bob), egui::vec2(sz, sz));
+                        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                        ui.painter().image(logo.id(), r, uv, Color32::WHITE);
+                    } else {
+                        ui.painter().text(egui::pos2(cx, cy - bob), egui::Align2::CENTER_CENTER, "🐶", egui::FontId::proportional(sz), Color32::WHITE);
+                    }
+                    // now-playing text, bottom-center
+                    if let Some(t) = &cur {
+                        ui.painter().text(egui::pos2(cx, screen.bottom() - 96.0), egui::Align2::CENTER_CENTER, &t.title, egui::FontId::proportional(26.0), Color32::WHITE);
+                        ui.painter().text(egui::pos2(cx, screen.bottom() - 68.0), egui::Align2::CENTER_CENTER, &t.artist, egui::FontId::proportional(16.0), Color32::from_rgba_unmultiplied(255, 255, 255, 200));
+                    }
+                    // 🥁 launch-the-game button, bottom-center
+                    let bw = 240.0;
+                    let brect = egui::Rect::from_center_size(egui::pos2(cx, screen.bottom() - 34.0), egui::vec2(bw, 38.0));
+                    let bresp = ui.interact(brect, egui::Id::new("tg-launch"), egui::Sense::click());
+                    ui.painter().rect_filled(brect, 19.0, if bresp.hovered() { ACCENT } else { ACCENT.gamma_multiply(0.85) });
+                    ui.painter().text(brect.center(), egui::Align2::CENTER_CENTER, "🥁  play the beat game", egui::FontId::proportional(16.0), Color32::BLACK);
+                    if hand(bresp).clicked() { want_game = true; }
+                } else {
+                    // ---------- the tap-along beat game ----------
+                    // song + BPM line, top-center
+                    let song = match &cur {
+                        Some(t) if !t.title.is_empty() => if t.artist.is_empty() { t.title.clone() } else { format!("{} — {}", t.title, t.artist) },
+                        _ => "Play a song, then tap along".to_string(),
+                    };
+                    ui.painter().text(egui::pos2(cx, 70.0), egui::Align2::CENTER_CENTER, &song, egui::FontId::proportional(20.0), Color32::WHITE);
+                    let bpm_line = if self.bm_state == 1 {
+                        "finding the beat…".to_string()
+                    } else if self.bm_bpm > 0.0 {
+                        format!("{} BPM", self.bm_bpm.round() as i32)
+                    } else {
+                        String::new()
+                    };
+                    ui.painter().text(egui::pos2(cx, 98.0), egui::Align2::CENTER_CENTER, &bpm_line, egui::FontId::proportional(14.0), MUTED);
+
+                    // tap pad: a big circle with a beat-pulse ring
+                    let pad_r = screen.height() * 0.22;
+                    let center = egui::pos2(cx, cy - 6.0);
+                    let pad = egui::Rect::from_center_size(center, egui::vec2(pad_r * 2.0, pad_r * 2.0));
+                    let presp = ui.interact(pad, egui::Id::new("tg-pad"), egui::Sense::click());
+                    // pulse ring (phase 0 = on a beat → ring at its brightest/largest)
+                    if snap.playing {
+                        if let Some(ph) = self.tg_phase(snap.position) {
+                            let pulse = 1.0 - ph; // 1 on the beat, fading to 0
+                            ui.painter().circle_stroke(center, pad_r * (1.06 + 0.10 * pulse), egui::Stroke::new(3.0, ACCENT.gamma_multiply(0.25 + 0.6 * pulse)));
+                        }
+                    }
+                    ui.painter().circle_filled(center, pad_r, if presp.hovered() { ACCENT.gamma_multiply(0.28) } else { ACCENT.gamma_multiply(0.18) });
+                    ui.painter().circle_stroke(center, pad_r, egui::Stroke::new(2.0, ACCENT));
+                    if hand(presp).clicked() { do_tap = true; }
+
+                    // big streak number in the middle of the pad
+                    let streak = if self.tg_streak_start >= 0.0 { (snap.position - self.tg_streak_start).max(0.0) } else { 0.0 };
+                    ui.painter().text(center, egui::Align2::CENTER_CENTER, format!("{streak:.1}"), egui::FontId::proportional(pad_r * 0.62), Color32::WHITE);
+                    ui.painter().text(egui::pos2(cx, center.y + pad_r * 0.42), egui::Align2::CENTER_CENTER, "seconds on the beat", egui::FontId::proportional(13.0), MUTED);
+
+                    // best + status below the pad
+                    ui.painter().text(egui::pos2(cx, center.y + pad_r + 34.0), egui::Align2::CENTER_CENTER, format!("Best: {:.1}s", self.tg_best), egui::FontId::proportional(16.0), ACCENT);
+                    let status = if !self.tg_status.is_empty() {
+                        self.tg_status.clone()
+                    } else if !snap.playing {
+                        "Press play ▶ then tap".to_string()
+                    } else {
+                        "tap the pad — or press Space — on every beat".to_string()
+                    };
+                    ui.painter().text(egui::pos2(cx, center.y + pad_r + 60.0), egui::Align2::CENTER_CENTER, &status, egui::FontId::proportional(14.0), Color32::from_rgba_unmultiplied(255, 255, 255, 200));
+
+                    // ← back to the puppy, top-left
+                    let back = egui::Rect::from_min_size(egui::pos2(18.0, 16.0), egui::vec2(150.0, 34.0));
+                    let backr = ui.interact(back, egui::Id::new("tg-back"), egui::Sense::click());
+                    ui.painter().text(back.left_center(), egui::Align2::LEFT_CENTER, "←  back to puppy", egui::FontId::proportional(15.0), if backr.hovered() { Color32::WHITE } else { MUTED });
+                    if hand(backr).clicked() { want_dog = true; }
+
+                    // green/red tap-feedback flash over the whole screen
+                    if self.tg_flash_good > 0.0 {
+                        let a = (self.tg_flash_good / 0.2 * 70.0) as u8;
+                        ui.painter().rect_filled(screen, 0.0, Color32::from_rgba_unmultiplied(60, 200, 90, a));
+                    }
+                    if self.tg_flash_bad > 0.0 {
+                        let a = (self.tg_flash_bad / 0.2 * 90.0) as u8;
+                        ui.painter().rect_filled(screen, 0.0, Color32::from_rgba_unmultiplied(220, 60, 60, a));
+                    }
                 }
+
                 // ✕ close, top-right (Esc and V work too)
                 let close = egui::Rect::from_min_size(egui::pos2(screen.right() - 52.0, 16.0), egui::vec2(36.0, 36.0));
                 let cresp = ui.interact(close, egui::Id::new("fullviz-x"), egui::Sense::click());
-                ui.painter().text(
-                    close.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "✕",
-                    egui::FontId::proportional(24.0),
-                    if cresp.hovered() { Color32::WHITE } else { MUTED },
-                );
-                if hand(cresp).clicked() {
-                    self.show_full_viz = false;
-                }
+                ui.painter().text(close.center(), egui::Align2::CENTER_CENTER, "✕", egui::FontId::proportional(24.0), if cresp.hovered() { Color32::WHITE } else { MUTED });
+                if hand(cresp).clicked() { want_close = true; }
             });
+        // apply deferred actions outside the closure
+        if do_tap { self.tg_tap(snap); }
+        if want_game { self.tg_game = true; self.tg_status.clear(); self.tg_streak_start = -1.0; self.tg_last_good = -1.0; }
+        if want_dog { self.tg_game = false; self.tg_end_streak(); }
+        if want_close { self.show_full_viz = false; self.tg_game = false; self.tg_end_streak(); }
     }
 
     // -------------------- PLAYLISTS TAB --------------------

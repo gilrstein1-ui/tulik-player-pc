@@ -154,6 +154,16 @@ pub struct PlGroup {
     pub playlists: Vec<PlaylistItem>,
 }
 
+/// True BPM + real beat timestamps (librosa) for a track — powers the tap-along
+/// beat game and the puppy's beat-sync. `bpm` 0 / empty `beats` ⇒ not available.
+#[derive(Clone, Debug, Deserialize, Default)]
+pub struct Beatmap {
+    #[serde(default)]
+    pub bpm: f32,
+    #[serde(default)]
+    pub beats: Vec<f32>,
+}
+
 /// Streamed events from quick-generate.
 pub enum QgEvent {
     Progress(String, String), // step, message
@@ -542,6 +552,18 @@ impl ApiClient {
             .json()
             .context("lyrics json")?;
         Ok(l)
+    }
+
+    /// Real beat-map for the tap-along game (Gil's instance only; ~10s on first
+    /// play, cached server-side). 404/503 on other instances → treated as "none".
+    pub fn beatmap(&self, rating_key: &str) -> Result<Beatmap> {
+        let b: Beatmap = self
+            .get(&format!("/api/player/beatmap/{rating_key}"))
+            .send()?
+            .error_for_status()?
+            .json()
+            .context("beatmap json")?;
+        Ok(b)
     }
 
     /// Fetch the full encoded audio bytes for a track (mp3/flac/m4a/ogg/…).
