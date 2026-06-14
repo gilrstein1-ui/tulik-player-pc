@@ -1280,7 +1280,7 @@ impl eframe::App for App {
             });
             if space {
                 if self.show_full_viz && self.tg_game && self.is_gil {
-                    self.tg_tap(snap); // Space is a beat tap while the game is open
+                    self.tg_tap(&snap); // Space is a beat tap while the game is open
                 } else if self.follow_on {
                     self.follow_control(if self.follow_playing { "pause" } else { "play" });
                 } else {
