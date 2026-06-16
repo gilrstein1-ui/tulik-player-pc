@@ -1822,6 +1822,7 @@ impl App {
                         if hand(ui.add(cap)).on_hover_text("Snapshot the app window and attach it").clicked() {
                             self.fb_want_shot = true;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot);
+                            ctx.request_repaint();
                         }
                         let paste = egui::Button::new(RichText::new("📋 Paste image").color(TEXT)).fill(CARD2).rounding(9.0);
                         if hand(ui.add(paste)).on_hover_text("Paste a screenshot from the clipboard (or press Ctrl+V)").clicked() {
@@ -3934,12 +3935,16 @@ fn colorimage_to_png(img: &egui::ColorImage) -> Option<Vec<u8>> {
     for p in &img.pixels {
         rgba.extend_from_slice(&[p.r(), p.g(), p.b(), p.a()]);
     }
-    let buf = image::RgbaImage::from_raw(w as u32, h as u32, rgba)?;
-    let mut png = std::io::Cursor::new(Vec::new());
-    image::DynamicImage::ImageRgba8(buf)
-        .write_to(&mut png, image::ImageFormat::Png)
-        .ok()?;
-    Some(png.into_inner())
+    use image::ImageEncoder;
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new_with_quality(
+        &mut png,
+        image::codecs::png::CompressionType::Fast,
+        image::codecs::png::FilterType::NoFilter,
+    )
+    .write_image(&rgba, w as u32, h as u32, image::ExtendedColorType::Rgba8)
+    .ok()?;
+    Some(png)
 }
 
 /// Read an image from the system clipboard as PNG bytes — the native answer to the
