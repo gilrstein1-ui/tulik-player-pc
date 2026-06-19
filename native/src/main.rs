@@ -956,14 +956,12 @@ impl App {
                 }
                 DataMsg::PhoneCheck(d) => {
                     if d.playing && !self.follow_on {
-                        let idle = self.audio.shared.lock().map(|s| s.queue.is_empty()).unwrap_or(false);
-                        if idle {
-                            // nothing queued here — follow the phone automatically (web parity)
-                            self.enter_follow();
-                        } else {
-                            let who = d.player.clone().unwrap_or_else(|| "Plexamp".into());
-                            self.toast = format!("📱 {who} is playing on your phone — 📡 → Follow phone to control it");
-                        }
+                        // Don't auto-hijack into phone-follow mode — that leaves the PC
+                        // unable to play locally (the transport then drives the phone, and
+                        // nothing auto-exits when the phone stops). Just surface the option;
+                        // the user taps 📡 to follow when they actually want it.
+                        let who = d.player.clone().unwrap_or_else(|| "Plexamp".into());
+                        self.toast = format!("📱 {who} is playing on your phone — 📡 → Follow phone to control it");
                     }
                 }
                 DataMsg::QueueTracks(act, title, tracks) => {
