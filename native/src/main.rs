@@ -5,6 +5,7 @@
 mod api;
 mod audio;
 mod config;
+mod update;
 
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -323,6 +324,8 @@ struct App {
     tg_flash_good: f32,
     tg_flash_bad: f32,
     tg_status: String,
+    /// in-app updater state (newer build available / downloading)
+    update: update::Shared,
 }
 
 impl App {
@@ -336,6 +339,15 @@ impl App {
         let is_gil = cfg.user == "gil";
         let user_label = cfg.label.clone();
         let api = ApiClient::new(&cfg);
+        // In-app updater: check the hub for a newer build in the background.
+        let update = update::new_state();
+        update::check(
+            update.clone(),
+            cfg.base_url.clone(),
+            cfg.user.clone(),
+            cfg.pw.clone(),
+            BUILD.parse::<i64>().unwrap_or(0),
+        );
         let audio = audio::spawn(api.clone(), ctx.clone());
         // restore the previous session (queue + position), paused
         if let Some(sess) = load_session() {
@@ -481,6 +493,7 @@ impl App {
             pl_groups: None,
             pl_loading: false,
             base_url,
+            update,
             follow_on: false,
             follow_pid: None,
             follow_player: String::new(),
@@ -1111,6 +1124,53 @@ impl App {
         });
     }
 
+    /// Top banner offering a one-tap in-app update when the hub has a newer build.
+    fn update_banner(&mut self, ctx: &egui::Context) {
+        let (avail, busy, err) = match self.update.lock() {
+            Ok(s) => (s.available, s.busy, s.error.clone()),
+            Err(_) => return,
+        };
+        if avail.is_none() && !busy && err.is_none() {
+            return;
+        }
+        let mut do_update = false;
+        let mut dismiss = false;
+        egui::TopBottomPanel::top("update_bar")
+            .frame(egui::Frame::none().fill(Color32::from_rgb(18, 40, 28)).inner_margin(egui::Margin::symmetric(16.0, 8.0)))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if busy {
+                        ui.add(egui::Spinner::new());
+                        ui.label(RichText::new("Downloading update… the app will restart when it's ready.").color(TEXT));
+                    } else if let Some(e) = err.as_ref() {
+                        ui.label(RichText::new(format!("Update failed: {e}")).color(Color32::from_rgb(230, 120, 110)));
+                    } else if let Some(b) = avail {
+                        ui.label(RichText::new(format!("⬆ A newer version is available (build {b}).")).strong().color(GOOD));
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if !busy {
+                            if avail.is_some() && hand(ui.button(RichText::new("Update now").strong())).clicked() {
+                                do_update = true;
+                            }
+                            if hand(ui.button("Later")).clicked() {
+                                dismiss = true;
+                            }
+                        }
+                    });
+                });
+            });
+        if do_update {
+            let (base, user, pw) = self.api.auth();
+            update::apply(self.update.clone(), base, user, pw);
+        }
+        if dismiss {
+            if let Ok(mut s) = self.update.lock() {
+                s.available = None;
+                s.error = None;
+            }
+        }
+    }
+
     /// Green "✓ Fixed — you reported …" banner with Update + Dismiss (web parity).
     /// Native can't self-update, so Update opens the hub download page in a browser.
     fn notices_banner(&mut self, ctx: &egui::Context) {
@@ -1365,6 +1425,7 @@ impl eframe::App for App {
                     });
                 });
         }
+        self.update_banner(ctx);
         self.notices_banner(ctx);
         self.play_bar(ctx, &snap);
         if self.tab == Tab::Library {

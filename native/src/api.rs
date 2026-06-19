@@ -326,6 +326,11 @@ impl ApiClient {
         }
     }
 
+    /// (base_url, user, password) — for the in-app updater.
+    pub fn auth(&self) -> (String, String, String) {
+        (self.base.clone(), self.user.clone(), self.pw.clone())
+    }
+
     // --- library browse ---
     pub fn albums(&self, sort: &str) -> Result<Vec<Album>> {
         let r: Albums = self
