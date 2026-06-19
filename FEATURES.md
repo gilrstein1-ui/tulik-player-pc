@@ -18,6 +18,17 @@ canonical feature set; everything else is measured against it.
 
 _Last updated: 2026-06-19 — **in-app updaters** on Native (build 36) + Android (v2.12); Android **mobile layout self-adapts** to screen width; Android repo now **PUBLIC** too (`VARIANT_URLS`/`KEYSTORE_B64`/`PW_*` secrets). Earlier: native build 31 (Rounds 1–5: theme repaint + DM Sans, feedback screenshots, idle panel); both repos PUBLIC. **Visualizer REMOVED everywhere**, replaced on Gil's PC app only by the dancing puppy._
 
+## Play interaction + volume + window fixes — 2026-06-19 (web canon; all 5)
+
+| Item | Web | Native (PC) | Tauri | Android |
+|---|---|---|---|---|
+| **Click a song = replace queue + play** (one canonical path; ▶ hints persistent, not hover-gated) | ✅ shipped all 5 | ✅ already whole-row→SetQueue (align intent names) | 🌐 | 🌐 |
+| **Volume persists** in its own key (was lost inside the big session blob) | ✅ all 5 | ✅ already (own session) | 🌐 | 🌐 |
+| **Desktop window not clipped by the taskbar** (`fixDesktopClip` measures overlap) | ✅ (Tauri/standalone) | — egui sizes its own window | ✅ via the live page | — |
+
+See `music/docs/play-interaction-redesign.md`. The web player carries an inline
+`PLAY-INTERACTION DESIGN` guardrail so the auto-fixer won't regress the intents.
+
 ## In-app self-updaters — 2026-06-19 (Native build 36 · Android v2.12)
 
 | Item | Web | Native (PC) | Tauri | Android |
