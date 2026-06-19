@@ -16,7 +16,17 @@ canonical feature set; everything else is measured against it.
 **Legend:** ✅ done · ⚠️ partial · ❌ missing · 🌐 inherited via webview · — N/A
 · ❓ verify in web
 
-_Last updated: 2026-06-13 — native **build 31** (Rounds 1–5 done: theme repaint + DM Sans, feedback screenshots, idle panel); **repo is now PUBLIC**, endpoints/creds only in `BUILD_CONFIG`/`PW_*` secrets. **Visualizer REMOVED everywhere** by owner request, replaced on Gil's PC app only by the dancing puppy._
+_Last updated: 2026-06-19 — **in-app updaters** on Native (build 36) + Android (v2.12); Android **mobile layout self-adapts** to screen width; Android repo now **PUBLIC** too (`VARIANT_URLS`/`KEYSTORE_B64`/`PW_*` secrets). Earlier: native build 31 (Rounds 1–5: theme repaint + DM Sans, feedback screenshots, idle panel); both repos PUBLIC. **Visualizer REMOVED everywhere**, replaced on Gil's PC app only by the dancing puppy._
+
+## In-app self-updaters — 2026-06-19 (Native build 36 · Android v2.12)
+
+| Item | Web | Native (PC) | Tauri | Android |
+|---|---|---|---|---|
+| **One-tap in-app update** (check hub manifest on launch → download → install/relaunch) | — (it's the server) | ✅ `update.rs` — downloads new exe, relauncher `.bat` swaps it in once the app exits, restarts (never deletes old until new is in place). Brief restart, not silent. | ❌ (not added; could use Tauri updater later) | ✅ `Updater.kt` — downloads APK + system install prompt; same stable key → installs in place; needs `REQUEST_INSTALL_PACKAGES` + one-time allow-unknown-sources. |
+| **Version manifest** auto-published on deploy | — | ✅ `/hub/TulikPlayerNative.version.json` (`build` = CI run_number) | — | ✅ `/hub/TulikPlayer.version.json` (`versionCode`) |
+| **Mobile layout adapts to screen width** (self-measured bottom bar) | 🌐 | — | 🌐 | ✅ `bridge.js` (2026-06-19) |
+
+First adoption = one manual install of the updater-containing build (Native 36 / Android v2.12); everything after is automatic. `fix_app.py` publishes both manifests on every deploy. **PC self-update UNTESTED on real Windows** — swap logic is conservative (failed update relaunches the old exe). Supersedes the old "native can't self-update — Update opens the hub" behaviour.
 
 ## Native parity Round 4 — 2026-06-13 (build 27) — "stop looking like old MediaSage" + screenshots
 The two PC-app feedback items Gil flagged as still "planned":
@@ -41,7 +51,7 @@ last rename). **Round 1 (shipped this build):**
 | Item | Native before | Native now |
 |---|---|---|
 | Feedback 🐞 Bug / 💡 Idea tag + "Only for me" + `source=windows-app`/`page` tags | ❌ text-only | ✅ |
-| **Notices** green "✓ Fixed — you reported …" banner (poll `/notices` every 3 min, Dismiss → `/notices/dismiss`; `fix_type=pc` shows **⬆ Update → opens the hub** since native can't self-update) | ❌ | ✅ |
+| **Notices** green "✓ Fixed — you reported …" banner (poll `/notices` every 3 min, Dismiss → `/notices/dismiss`; `fix_type=pc` Update — now a one-tap in-app self-update as of build 36, see the 2026-06-19 section) | ❌ | ✅ |
 | Right-click track menu on the **queue side-panel rows** + the **big now-playing cover** (history/recent/browser/album/playlist rows already had it) | ⚠ library only | ✅ (playbar mini-thumb still pending) |
 | Track menu enriched: **▶ Play now** + **💿 Go to album** added everywhere | ⚠ | ✅ |
 | Artists view = **real cover-art grid** (server `thumb`), monogram only as fallback | ❌ monograms | ✅ |
